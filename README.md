@@ -194,6 +194,7 @@ New features are written in `core` behind the `GameInterface`, so another game o
   whose add-on API the mod talks to.
 - Libraries: Dear ImGui, spdlog, MinHook, GLM, JSON for Modern C++, tinyobjloader, magic_enum, incbin,
   IconFontCppHeaders; fonts Rubik and Font Awesome 6 Free. Their licenses are in `NOTICES.txt` of each release.
+- @luslex on X for Surface Depth/POM Texture idea.
 
 ## License
 
