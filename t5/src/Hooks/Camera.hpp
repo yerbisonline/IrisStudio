@@ -29,6 +29,17 @@ namespace IWXMVM::T5::Hooks::Camera
 
     // main thread: where the dolly is at a timeline tick, from the campath the frame uses; none without one
     std::optional<glm::vec3> GetDollyPosition(std::uint32_t timelineTick);
+    // The dolly as the latest views were built with it, for the harness to measure how it moves: each view's timeline
+    // tick and where the camera was
+    struct DollyView
+    {
+        std::uint32_t timelineTick = 0;
+        glm::vec3 position{0.0f};
+        glm::vec3 rotation{0.0f};
+        double time = 0.0;  // real time, in ms
+    };
+    // the latest last
+    std::vector<DollyView> GetDollyViews();
 
     // Whether the frame shows the demo player's own screen (their vision and screen filters): only in first person.
     // Kept leaves the game's own vision or filters in every view, for the harness to compare.

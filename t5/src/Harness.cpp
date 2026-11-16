@@ -6942,6 +6942,118 @@ namespace IWXMVM::T5::Harness
         return false;
     }
 
+    // How the dolly moves along the campath as the game draws it (apart as RunAutoEaseCommand)
+    std::optional<KeyframeLogic::PathProfile> lastCampathProfile;
+
+    bool RunCampathCommand(const std::string& name, std::istringstream& args)
+    {
+        if (name != "campath")
+            return false;
+        // campath profile <start tick> <end tick> [timeout ms]: the dolly's views as the demo plays from the one tick
+        // to the other (the scenario jumps before it and unpauses), until one at or past the end: logs PROFILE with
+        // the speeds (least, most, first, last), the biggest change of acceleration and the biggest turn from one
+        // frame to the next, and where. campath profile expect <speed|first|last|acceleration|turn> <min> <max>: PASS
+        // when the last profile's is within them (speed: the least and the most). campath curves on|off: the
+        // campath's own curves, or the Look's and the eases' first shape, for comparisons. campath interpolation expect
+        // <auto|smooth|linear|hold|mixed>: PASS when the nodes all have it (mixed: they differ), as the Camera tab's
+        // Interpolation row shows it
+        std::string action;
+        args >> action;
+        if (action == "curves")
+        {
+            std::string on;
+            args >> on;
+            KeyframeLogic::SetPathCurves(on != "off");
+            Log(std::format("campath curves {}", on != "off" ? "on" : "off"));
+            return true;
+        }
+        if (action == "interpolation")
+        {
+            std::string expect, expected;
+            args >> expect >> expected;
+            std::optional<Types::KeyInterpolation> shared;
+            RunOnRenderThread([&] {
+                auto& keyframes = Components::KeyframeManager::Get();
+                shared = KeyframeLogic::GetSharedInterpolation(
+                    keyframes.GetKeyframes(keyframes.GetProperty(Types::KeyframeablePropertyType::CampathCamera)));
+            });
+            const auto text = shared ? std::string(magic_enum::enum_name(*shared)) : std::string("Mixed");
+            Log(std::format("{} campath interpolation {} (expected {})",
+                            _stricmp(text.c_str(), expected.c_str()) == 0 ? "PASS" : "FAIL", text, expected));
+            return true;
+        }
+        if (action == "views")
+        {
+            // campath views [count]: the dolly's latest views, the latest last (tick, position, yaw)
+            std::size_t count = 40;
+            args >> count;
+            const auto views = Hooks::Camera::GetDollyViews();
+            std::string text;
+            for (std::size_t i = views.size() > count ? views.size() - count : 0; i < views.size(); ++i)
+                text += std::format(" {}: {:.2f} {:.2f} {:.2f} {:.2f};", views[i].timelineTick, views[i].position.x,
+                                    views[i].position.y, views[i].position.z, views[i].rotation.y);
+            Log("DOLLYVIEWS" + text);
+            return true;
+        }
+        if (action != "profile")
+        {
+            Log(std::format("FAIL campath: no action {}", action));
+            return true;
+        }
+        std::string first;
+        args >> first;
+        if (first == "expect")
+        {
+            std::string what;
+            double low = 0, high = 0;
+            args >> what >> low >> high;
+            if (!lastCampathProfile)
+            {
+                Log("FAIL campath profile expect: no profile yet");
+                return true;
+            }
+            const auto& profile = *lastCampathProfile;
+            const auto one = what == "first"          ? profile.first
+                             : what == "last"         ? profile.last
+                             : what == "acceleration" ? profile.accelerationStep
+                                                      : profile.turn;
+            const auto [from, to] = what == "speed" ? std::pair(profile.least, profile.most) : std::pair(one, one);
+            Log(std::format("{} campath profile {} {:.1f} to {:.1f} (expected {} to {})",
+                            from >= low && to <= high ? "PASS" : "FAIL", what, from, to, low, high));
+            return true;
+        }
+        const auto start = std::strtod(first.c_str(), nullptr);
+        double end = 0, timeout = 20000;
+        args >> end >> timeout;
+        std::vector<KeyframeLogic::PathSample> samples;
+        // (only views built from now on: the ones kept from before a jump are at other ticks)
+        const auto before = Hooks::Camera::GetDollyViews();
+        double seen = before.empty() ? 0.0 : before.back().time;
+        bool reached = false;
+        const auto began = GetTickCount64();
+        while (!reached && static_cast<double>(GetTickCount64() - began) < timeout)
+        {
+            for (const auto& view : Hooks::Camera::GetDollyViews())
+            {
+                if (view.time <= seen)
+                    continue;
+                seen = view.time;
+                if (view.timelineTick >= start && view.timelineTick <= end)
+                    samples.push_back({static_cast<double>(view.timelineTick), view.position});
+                reached = reached || view.timelineTick >= end;
+            }
+            Sleep(20);
+        }
+        lastCampathProfile = KeyframeLogic::MakeProfile(samples);
+        const auto& profile = *lastCampathProfile;
+        Log(std::format("{}PROFILE frames {}, speed {:.1f} to {:.1f} (first {:.1f}, last {:.1f}), acceleration step "
+                        "{:.0f} at {:.0f}, turn {:.2f} at {:.0f}",
+                        reached ? "" : "FAIL campath profile: the dolly never reached the end; ", profile.frames,
+                        profile.least, profile.most, profile.first, profile.last, profile.accelerationStep,
+                        profile.accelerationStepTick, profile.turn, profile.turnTick));
+        return true;
+    }
+
     // Auto Ease (see RunKillstreakCommand for why it is apart)
     bool RunAutoEaseCommand(const std::string& name, std::istringstream& args)
     {
@@ -10223,7 +10335,7 @@ namespace IWXMVM::T5::Harness
     }
 
     // commands for the walk drawn as its looks, the joins between them and sliding the walk
-    // campaignmap [entities <file> | expect <level> [<least kept images> <least spawns>]]: logs the campaign level
+    // campaignmap [entities <file> | expect <level> [<least kept images> <least spawns>] | none]: logs the campaign level
     // loaded as a multiplayer map (CampaignMaps): what of each type was registered,
     // shared, left out or had no room, its entities and spawn points, the scripts and kit, the time, notes and the
     // pools' free slots; with entities, writes the entity string multiplayer got to a file; with expect, PASS when that
@@ -10262,6 +10374,12 @@ namespace IWXMVM::T5::Harness
         std::string sub;
         args >> sub;
         const auto state = CampaignMaps::GetState();
+        if (sub == "none")
+        {
+            // campaignmap none: PASS when the map loaded is no campaign level or Zombies map (a multiplayer map's own)
+            Log(std::format("{} campaignmap none: {}", !state ? "PASS" : "FAIL", state ? state->level : "none"));
+            return true;
+        }
         if (!state)
         {
             Log("CAMPAIGNMAP none (" + CampaignMaps::GetError() + ")");
@@ -13364,7 +13482,8 @@ namespace IWXMVM::T5::Harness
             RunTransitionCommand(name, args) || RunBoneCameraCommand(name, args) || RunBulletTimeCommand(name, args) ||
             RunKillstreakCommand(name, args) || RunPlacedPropCommand(name, args) || RunDemoLoadCommand(name, args) ||
             RunGameModCommand(name, args) ||
-            RunAutoEaseCommand(name, args) || RunFxWatchCommand(name, args) || RunSelectEventCommand(name, args) ||
+            RunAutoEaseCommand(name, args) || RunCampathCommand(name, args) || RunFxWatchCommand(name, args) ||
+            RunSelectEventCommand(name, args) ||
             RunLeftGunCommand(name, args) || RunWorkflowCommand(name, args) || RunFacingCommand(name, args) ||
             RunClipKeepCommand(name, args) || RunPathBarCommand(name, args) || RunWalkPieceCommand(name, args) ||
             RunTimelineScrollCommand(name, args) || RunViewLagCommand(name, args) || RunViewLinesCommand(name, args) ||

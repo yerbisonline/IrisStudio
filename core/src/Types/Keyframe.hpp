@@ -121,8 +121,10 @@ namespace IWXMVM::Types
     enum class KeyInterpolation : std::uint8_t
     {
         Auto,    // as IWXMVM had it before keys had one: linear while the track has under four keys, a cubic spline
-                 // through all of them from four (new campath nodes, and the keys of older files)
-        Smooth,  // a curve through the keys around it, held back so it doesn't overshoot them
+                 // through all of them from four (the keys of older files); the campath's nodes (new ones have it): a
+                 // spline through all of them from two, which passes through its ends
+        Smooth,  // a curve through the keys around it, held back so it doesn't overshoot them; the campath's: through
+                 // the nodes around it, with no stop at a node
         Linear,
         Hold,  // stays until the next key
     };

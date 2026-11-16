@@ -189,6 +189,68 @@ namespace
         }
         return true;
     }
+
+    // A campath from a film: five nodes over 1.71 s and 280 units, which turns about 36
+    // degrees at its fourth node; its X, Y, Z, pitch and yaw
+    constexpr std::array<std::pair<std::uint32_t, std::array<float, 5>>, 5> FILM_NODES = {{
+        {90391, {883.5695f, 2782.9016f, 37.5235f, -15.6f, -172.7f}},
+        {90793, {819.1826f, 2740.2185f, 36.1692f, -15.6f, -171.8032f}},
+        {91264, {748.2736f, 2724.5781f, 35.9981f, -12.0290f, -176.0921f}},
+        {91655, {688.8417f, 2712.8586f, 37.3388f, -6.7787f, -196.5020f}},
+        {92102, {626.7946f, 2741.2300f, 35.5504f, -1.5283f, -206.1153f}},
+    }};
+
+    std::vector<Types::Keyframe> FilmNodes(KeyInterpolation interpolation, std::size_t count = FILM_NODES.size())
+    {
+        std::vector<Types::Keyframe> nodes;
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            const auto& [tick, v] = FILM_NODES[i];
+            nodes.push_back(Node(tick, {v[0], v[1], v[2]}, {v[3], v[4], 0.2229f}, 66.55f, interpolation));
+        }
+        return nodes;
+    }
+
+    // the same places as keys of a Look property's (a Vector3), whose curves are as they were
+    std::vector<Types::Keyframe> FilmPlaces(KeyInterpolation interpolation)
+    {
+        std::vector<Types::Keyframe> keys;
+        for (const auto& [tick, v] : FILM_NODES)
+        {
+            keys.emplace_back(VECTOR_PROPERTY, tick, glm::vec3(v[0], v[1], v[2]));
+            keys.back().interpolation = interpolation;
+        }
+        return keys;
+    }
+
+    // how a camera on the keys moves over frames this many ms apart, from the first key to the last
+    KeyframeLogic::PathProfile ProfileOf(const std::vector<Types::Keyframe>& keys, double frameMs = 20.0)
+    {
+        const auto type = keys.front().property.get().valueType;
+        std::vector<KeyframeLogic::PathSample> samples;
+        const auto add = [&](double tick) {
+            const auto value = KeyframeLogic::Evaluate(type, keys, tick);
+            samples.push_back(
+                {tick, type == Types::KeyframeValueType::CameraData ? value.cameraData.position : value.vector3});
+        };
+        for (double tick = keys.front().tick; tick < keys.back().tick; tick += frameMs)
+            add(tick);
+        add(keys.back().tick);
+        return KeyframeLogic::MakeProfile(samples);
+    }
+
+    // how much a camera's acceleration along its way jumps at a tick (u/s2), from its speed over 5 ms on either side
+    double AccelerationJump(const std::vector<Types::Keyframe>& nodes, double tick)
+    {
+        const auto at = [&](double t) {
+            return KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, nodes, t).cameraData.position;
+        };
+        constexpr double STEP = 5.0;
+        const auto speed = [&](double from) { return glm::distance(at(from), at(from + STEP)) / (STEP / 1000.0); };
+        const auto before = (speed(tick - STEP) - speed(tick - 2 * STEP)) / (STEP / 1000.0);
+        const auto after = (speed(tick + STEP) - speed(tick)) / (STEP / 1000.0);
+        return std::abs(after - before);
+    }
 }  // namespace
 
 TEST("keys of older files (Auto) go as they did: linear under four keys")
@@ -204,11 +266,6 @@ TEST("keys of older files (Auto) go as they did: linear under four keys")
         sun.back().interpolation = KeyInterpolation::Auto;
     }
     CHECK(MatchesOld(Types::KeyframeValueType::Vector3, sun));
-
-    const std::vector nodes = {Node(20000, {100, 200, 30}, {10, 45, 0}, 80, KeyInterpolation::Auto),
-                               Node(21500, {400, -50, 90}, {-5, 120, 3}, 70, KeyInterpolation::Auto),
-                               Node(24000, {900, 10, 60}, {0, 170, 0}, 90, KeyInterpolation::Auto)};
-    CHECK(MatchesOld(Types::KeyframeValueType::CameraData, nodes));
 }
 
 TEST("keys of older files (Auto) go as they did: the cubic spline through all of them from four keys")
@@ -216,12 +273,155 @@ TEST("keys of older files (Auto) go as they did: the cubic spline through all of
     CHECK(MatchesOld(
         Types::KeyframeValueType::FloatingPoint,
         FloatKeys({{1000, 0.5f}, {2500, -0.25f}, {2600, 1.0f}, {4000, 0.0f}, {9000, 0.75f}}, KeyInterpolation::Auto)));
-    const std::vector nodes = {Node(20000, {100, 200, 30}, {10, 45, 0}, 80, KeyInterpolation::Auto),
-                               Node(21500, {400, -50, 90}, {-5, 120, 3}, 70, KeyInterpolation::Auto),
-                               Node(24000, {900, 10, 60}, {0, 170, 0}, 90, KeyInterpolation::Auto),
-                               Node(25000, {950, 300, 40}, {12, 100, -4}, 65, KeyInterpolation::Auto),
-                               Node(29000, {-200, 800, 200}, {30, 15, 0}, 100, KeyInterpolation::Auto)};
-    CHECK(MatchesOld(Types::KeyframeValueType::CameraData, nodes));
+    CHECK(MatchesOld(Types::KeyframeValueType::Vector3, FilmPlaces(KeyInterpolation::Auto)));
+}
+
+TEST("the campath's Auto goes through its first and last node: only the eases slow its ends (#147)")
+{
+    // IWXMVM's spline, at rest at both ends, on the film's nodes: 0 u/s at the ends, 259 at most, and the brake into
+    // the last node starting at the fourth (the Look's Auto still has it)
+    const auto old = ProfileOf(FilmPlaces(KeyInterpolation::Auto));
+    CHECK(old.first < 30.0 && old.last < 30.0);
+    CHECK(old.most > 250.0);
+
+    const auto nodes = FilmNodes(KeyInterpolation::Auto);
+    const auto profile = ProfileOf(nodes);
+    CHECK(profile.first > 195.0 && profile.first < 215.0);
+    CHECK(profile.last > 150.0 && profile.last < 175.0);
+    CHECK(profile.least > 140.0);
+    CHECK(profile.most < 215.0);
+    // one curve: no step of acceleration at a node, no corner
+    CHECK(profile.accelerationStep < 30.0);
+    CHECK(profile.turn < 5.0);
+    // through every node
+    const auto at = [&](const std::vector<Types::Keyframe>& keys, double tick) {
+        return KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, keys, tick).cameraData.position;
+    };
+    for (const auto& node : nodes)
+        CHECK_NEAR(at(nodes, node.tick).y, node.value.cameraData.position.y, 1e-3);
+
+    // an ease of 1 leaves and arrives at rest; 30% slows it by 30%
+    auto eased = nodes;
+    eased.front().easeOut = 1.0f;
+    eased.back().easeIn = 1.0f;
+    // (frames 2 ms apart: over 20 ms it reaches 20 u/s already)
+    const auto atRest = ProfileOf(eased, 2.0);
+    CHECK(atRest.first < 5.0 && atRest.last < 5.0);
+    eased.front().easeOut = 0.3f;
+    eased.back().easeIn = 0.0f;
+    const auto slowed = ProfileOf(eased);
+    CHECK(slowed.first > 0.65 * profile.first && slowed.first < 0.8 * profile.first);
+    CHECK_NEAR(slowed.last, profile.last, 0.5);
+    // the stretches between are the same
+    CHECK_NEAR(KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, eased, 91400).cameraData.position.x,
+               KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, nodes, 91400).cameraData.position.x,
+               1e-4);
+
+    // Auto Ease's 30% at both ends leaves the second node and the one before the last as the curve has them (the
+    // eases' old shape bent the far end of the stretch: a jump of acceleration there)
+    eased.front().easeOut = 0.3f;
+    eased.back().easeIn = 0.3f;
+    CHECK(AccelerationJump(nodes, 90793) < 30.0);
+    CHECK(AccelerationJump(eased, 90793) < 30.0);
+    CHECK(AccelerationJump(eased, 91655) < 30.0);
+    KeyframeLogic::SetPathCurves(false);
+    const auto oldJump = AccelerationJump(eased, 90793);
+    KeyframeLogic::SetPathCurves(true);
+    CHECK(oldJump > 150.0);
+}
+
+TEST("the campath's Auto curves from three nodes, and two make a straight line (#147)")
+{
+    // the film's first three nodes turn 21 degrees at the second: a corner as straight lines, a curve now
+    const auto old = ProfileOf(FilmPlaces(KeyInterpolation::Linear));
+    CHECK(old.turn > 20.0);
+    const auto three = FilmNodes(KeyInterpolation::Auto, 3);
+    const auto profile = ProfileOf(three);
+    CHECK(profile.turn < 5.0);
+    CHECK(profile.least > 100.0);
+    const auto middle = KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, three, 91000).cameraData;
+    const auto straight = glm::mix(three[1].value.cameraData.position, three[2].value.cameraData.position,
+                                   (91000.0f - 90793.0f) / (91264.0f - 90793.0f));
+    CHECK(glm::distance(middle.position, straight) > 0.5f);
+
+    const auto two = FilmNodes(KeyInterpolation::Auto, 2);
+    const auto halfway = KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, two, 90592).cameraData;
+    const auto between = glm::mix(two[0].value.cameraData.position, two[1].value.cameraData.position, 0.5f);
+    CHECK(glm::distance(halfway.position, between) < 0.01f);
+    const auto line = ProfileOf(two);
+    CHECK_NEAR(line.least, line.most, 0.5);
+}
+
+TEST("the campath's Smooth stops no axis at a node, and goes through its ends (#147)")
+{
+    // the Look's Smooth on the same places: each axis stops where it turns (Y at the fourth node), and at the ends
+    const auto look = ProfileOf(FilmPlaces(KeyInterpolation::Smooth));
+    CHECK(look.first < 30.0 && look.last < 30.0);
+    CHECK(look.accelerationStep > 500.0);
+    const auto places = FilmPlaces(KeyInterpolation::Smooth);
+    const auto ys = KeyframeLogic::GetValues(places, 1, false);
+    CHECK(KeyframeLogic::GetSmoothSlope(places, ys, 3) == 0.0);
+
+    const auto nodes = FilmNodes(KeyInterpolation::Smooth);
+    CHECK(KeyframeLogic::GetPathSlope(nodes, KeyframeLogic::GetValues(nodes, 1, false), 3) != 0.0);
+    const auto profile = ProfileOf(nodes);
+    CHECK(profile.first > 190.0 && profile.last > 150.0);
+    CHECK(profile.least > 140.0);
+    CHECK(profile.most < 215.0);
+    CHECK(profile.accelerationStep < 60.0);
+    CHECK(profile.turn < 5.0);
+    for (const auto& node : nodes)
+    {
+        const auto value = KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, nodes, node.tick);
+        CHECK_NEAR(value.cameraData.position.x, node.value.cameraData.position.x, 1e-3);
+    }
+    // the same on both sides of a node
+    for (const std::uint32_t tick : {90793u, 91655u})
+    {
+        const auto at = [&](double t) {
+            return KeyframeLogic::Evaluate(Types::KeyframeValueType::CameraData, nodes, t).cameraData.position.y;
+        };
+        CHECK_NEAR((at(tick) - at(tick - 0.5)) / 0.5, (at(tick + 0.5) - at(tick)) / 0.5, 0.002);
+    }
+    // two nodes: a straight line, as Auto and Linear
+    const auto two = FilmNodes(KeyInterpolation::Smooth, 2);
+    const auto line = ProfileOf(two);
+    CHECK_NEAR(line.least, line.most, 0.5);
+}
+
+TEST("a profile of frames: the speeds, the biggest change of acceleration and the biggest turn")
+{
+    // a straight line at 100 u/s, a frame each 20 ms, one frame given twice
+    std::vector<KeyframeLogic::PathSample> line;
+    for (int i = 0; i <= 50; ++i)
+        line.push_back({i * 20.0, glm::vec3(i * 2.0f, 0, 0)});
+    line.insert(line.begin() + 10, line[10]);
+    const auto straight = KeyframeLogic::MakeProfile(line);
+    CHECK(straight.frames == 51);
+    CHECK_NEAR(straight.least, 100.0, 1e-3);
+    CHECK_NEAR(straight.most, 100.0, 1e-3);
+    CHECK(straight.accelerationStep < 1e-3);
+    CHECK(straight.turn < 1e-3);
+
+    // a corner, then twice the speed from one frame to the next
+    const std::vector<KeyframeLogic::PathSample> corner = {
+        {0, {0, 0, 0}}, {20, {2, 0, 0}}, {40, {4, 0, 0}}, {60, {4, 2, 0}}, {80, {4, 6, 0}}, {100, {4, 10, 0}}};
+    const auto turned = KeyframeLogic::MakeProfile(corner);
+    CHECK_NEAR(turned.turn, 90.0, 1e-3);
+    CHECK_NEAR(turned.turnTick, 40.0, 1e-3);
+    CHECK_NEAR(turned.least, 100.0, 1e-3);
+    CHECK_NEAR(turned.most, 200.0, 1e-3);
+    // 0, then 5,000 u/s2 for one frame, then 0 again
+    CHECK_NEAR(turned.accelerationStep, 5000.0, 1e-3);
+}
+
+TEST("the interpolation all the keys share, and none when they differ")
+{
+    CHECK(!KeyframeLogic::GetSharedInterpolation({}).has_value());
+    auto nodes = FilmNodes(KeyInterpolation::Auto);
+    CHECK(KeyframeLogic::GetSharedInterpolation(nodes) == KeyInterpolation::Auto);
+    nodes[2].interpolation = KeyInterpolation::Smooth;
+    CHECK(!KeyframeLogic::GetSharedInterpolation(nodes).has_value());
 }
 
 TEST("Linear goes straight from key to key, Hold stays until the next key")

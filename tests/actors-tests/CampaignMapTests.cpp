@@ -98,6 +98,23 @@ TEST("campaign maps: a level's zone and its language twin are the level, other z
     CHECK(!Maps::FindLevelOfZone(catalog, "mp_cairo"));
     CHECK(!Maps::FindLevelOfZone(catalog, "en_patch_mp"));
     CHECK(!Maps::FindLevelOfZone(catalog, "cuba_patch"));
+    // "mp_" is multiplayer's prefix, no language: a multiplayer map named after a level isn't the level
+    CHECK(!Maps::FindLevelOfZone(catalog, "mp_cuba") && !Maps::FindLevelOfZone(catalog, "en_mp_cuba"));
+}
+
+TEST("campaign maps: multiplayer's Kowloon isn't the campaign's kowloon")
+{
+    const auto catalog = Maps::ReadCatalog(ReadText(SHIPPED_CATALOG));
+    CHECK(Maps::FindLevelOfZone(catalog, "kowloon") && Maps::FindLevelOfZone(catalog, "en_kowloon"));
+    for (const auto zone : {"mp_kowloon", "en_mp_kowloon", "mp_kowloon_patch"})
+        CHECK(!Maps::FindLevelOfZone(catalog, zone) && !Maps::IsLoadedWithAny(catalog, zone));
+    // nor is any level's name a multiplayer map's with the prefix on, or what loads with one
+    for (const auto& level : catalog.levels)
+    {
+        CHECK(!Maps::FindLevelOfZone(catalog, "mp_" + level.name));
+        for (const auto& shared : level.zones)
+            CHECK(!Maps::IsLoadedWith(level, "mp_" + shared));
+    }
 }
 
 TEST("campaign maps: the shipped catalog has the 18 campaign levels with their teamsets")

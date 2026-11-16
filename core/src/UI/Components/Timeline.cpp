@@ -4571,15 +4571,18 @@ namespace IWXMVM::UI
         const bool anyNode = std::ranges::any_of(TimelineSelection::Get(), [campath](const Item& each) {
             return each.kind == Kind::Key && each.owner == campath;
         });
+        // (the campath's curves don't stop at a node)
         item(Types::KeyInterpolation::Smooth, "Smooth", "menu.smooth",
-             "A curve through the keys around it, which doesn't overshoot them");
+             anyNode ? "A curve through each node from the nodes beside it"
+                     : "A curve through the keys around it, which doesn't overshoot them");
         item(Types::KeyInterpolation::Linear, "Linear", "menu.linear", "Straight to the next key");
         item(Types::KeyInterpolation::Hold, "Hold", "menu.hold", "Stays until the next key");
         // (for keys that have it, and campath nodes, which have it when they are added)
         if (options.anyAuto || anyNode)
             item(Types::KeyInterpolation::Auto, "Auto", "menu.auto",
-                 "As keys always went, and new campath nodes do: straight while the track has under four "
-                 "keys, a curve through all of them from four");
+                 anyNode ? "One curve through all the nodes"
+                         : "As keys always went: straight while the track has under four keys, a curve through "
+                           "all of them from four");
         // how much they ease, as one step a drag (with a message as it ends)
         const auto described = TimelineSelection::Describe(
             std::vector<Item>(TimelineSelection::Get().begin(), TimelineSelection::Get().end()));

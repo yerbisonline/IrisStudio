@@ -7,6 +7,12 @@
 
 namespace IWXMVM::KeyframeLogic
 {
+    namespace
+    {
+        // the campath's own curves and the eases' shape that leaves an end without one unbent (SetPathCurves)
+        std::atomic<bool> pathCurves = true;
+    }  // namespace
+
     bool IsAngle(Types::KeyframeValueType type, std::uint32_t index)
     {
         return type == Types::KeyframeValueType::CameraData && index >= 3 && index <= 5;
@@ -34,12 +40,20 @@ namespace IWXMVM::KeyframeLogic
 
     double Ease(double fraction, float easeOut, float easeIn)
     {
-        // a cubic from 0 to 1 whose slopes at its ends are 1 less the eases: 1 and 1 is the fraction itself
         const double t = std::clamp(fraction, 0.0, 1.0);
-        const double leaving = 1.0 - std::clamp(easeOut, 0.0f, 1.0f);
-        const double arriving = 1.0 - std::clamp(easeIn, 0.0f, 1.0f);
-        const double t2 = t * t, t3 = t2 * t;
-        return (t3 - 2 * t2 + t) * leaving + (-2 * t3 + 3 * t2) + (t3 - t2) * arriving;
+        const double out = std::clamp(easeOut, 0.0f, 1.0f);
+        const double in = std::clamp(easeIn, 0.0f, 1.0f);
+        if (!pathCurves)
+        {
+            // (the shape eases had at first: a cubic, which also bends the stretch's other end)
+            const double t2 = t * t, t3 = t2 * t;
+            return (t3 - 2 * t2 + t) * (1.0 - out) + (-2 * t3 + 3 * t2) + (t3 - t2) * (1.0 - in);
+        }
+        // the fraction, its slope at each end 1 less that end's ease, and unbent at an end without one: an ease out of
+        // the first node leaves the second node's speed and acceleration as the curve has them, so no node but the
+        // eased one shows. It never goes back.
+        const double rest = 1.0 - t;
+        return t - out * t * rest * rest * rest + in * t * t * t * rest;
     }
 
     double Uneased(double eased, float easeOut, float easeIn)
@@ -51,6 +65,41 @@ namespace IWXMVM::KeyframeLogic
             (Ease(middle, easeOut, easeIn) < eased ? low : high) = middle;
         }
         return (low + high) / 2;
+    }
+
+    bool IsPath(std::span<const Types::Keyframe> keys)
+    {
+        return pathCurves && !keys.empty() &&
+               keys.front().property.get().type == Types::KeyframeablePropertyType::CampathCamera;
+    }
+
+    void SetPathCurves(bool on)
+    {
+        pathCurves = on;
+    }
+
+    double GetPathSlope(std::span<const Types::Keyframe> keys, std::span<const float> values, std::size_t key)
+    {
+        const auto n = keys.size();
+        if (n < 2 || key >= n)
+            return 0.0;
+        const auto secant = [&](std::size_t i) {
+            const double span = static_cast<double>(keys[i + 1].tick) - keys[i].tick;
+            return span > 0.0 ? (values[i + 1] - values[i]) / span : 0.0;
+        };
+        if (n == 2)
+            return secant(0);
+        // (unbent at the ends: a cubic from p0 to p1 with slopes m0 and m1 has no second derivative at p0 when
+        // m0 = (3 * secant - m1) / 2, and at p1 when m1 = (3 * secant - m0) / 2)
+        if (key == 0)
+            return 1.5 * secant(0) - 0.5 * GetPathSlope(keys, values, 1);
+        if (key + 1 == n)
+            return 1.5 * secant(n - 2) - 0.5 * GetPathSlope(keys, values, n - 2);
+        const double before = static_cast<double>(keys[key].tick) - keys[key - 1].tick;
+        const double after = static_cast<double>(keys[key + 1].tick) - keys[key].tick;
+        if (before <= 0.0 || after <= 0.0)
+            return 0.0;
+        return (secant(key - 1) * after + secant(key) * before) / (before + after);
     }
 
     double GetSmoothSlope(std::span<const Types::Keyframe> keys, std::span<const float> values, std::size_t key)
@@ -92,7 +141,7 @@ namespace IWXMVM::KeyframeLogic
 
     // Copyright (c) by NUMERICAL RECIPES IN C: THE ART OF SCIENTIFIC COMPUTING (ISBN 0-521-43108-5)
     // Modified. Thank you to dtugend for finding this! (Moved here from MathUtils as it was, for "Auto".)
-    float InterpolateCubicSpline(std::span<const float> ticks, std::span<const float> values, float tick)
+    float InterpolateCubicSpline(std::span<const float> ticks, std::span<const float> values, float tick, bool atRest)
     {
         const size_t n = values.size();
         if (n < 2)
@@ -105,8 +154,9 @@ namespace IWXMVM::KeyframeLogic
         float y2[MAX_NODES];  // second derivatives
         float u[MAX_NODES];
 
-        y2[0] = -0.5f;
-        u[0] = (3.0f / (ticks[1] - ticks[0])) * ((values[1] - values[0]) / (ticks[1] - ticks[0]));
+        // (at rest: the slope at the first key is 0; else its second derivative is, and the same at the last key)
+        y2[0] = atRest ? -0.5f : 0.0f;
+        u[0] = atRest ? (3.0f / (ticks[1] - ticks[0])) * ((values[1] - values[0]) / (ticks[1] - ticks[0])) : 0.0f;
 
         for (size_t i = 1; i <= n - 2; i++)
         {
@@ -124,9 +174,10 @@ namespace IWXMVM::KeyframeLogic
             u[i] = (6.0f * u[i] / (nextTick - prevTick) - sig * u[i - 1]) / p;
         }
 
-        auto qn = 0.5f;
-        auto un = (3.0f / (ticks[n - 1] - ticks[n - 2])) *
-                  (0.0f - (values[n - 1] - values[n - 2]) / (ticks[n - 1] - ticks[n - 2]));
+        auto qn = atRest ? 0.5f : 0.0f;
+        auto un = atRest ? (3.0f / (ticks[n - 1] - ticks[n - 2])) *
+                               (0.0f - (values[n - 1] - values[n - 2]) / (ticks[n - 1] - ticks[n - 2]))
+                         : 0.0f;
 
         y2[n - 1] = (un - qn * u[n - 2]) / (qn * y2[n - 2] + 1.0f);
 
@@ -184,12 +235,15 @@ namespace IWXMVM::KeyframeLogic
         {
             case Types::KeyInterpolation::Auto:
             {
-                // (in floats, as it was, so older files look exactly as they did)
+                // (in floats, as it was, so the Look's keys of older files look exactly as they did; the campath's
+                // spline goes through its ends and curves from three nodes, IsPath)
                 std::vector<float> ticks;
                 ticks.reserve(keys.size());
                 for (const auto& each : keys)
                     ticks.push_back(static_cast<float>(each.tick));
                 const auto at = easing ? static_cast<float>(key.tick + fraction * span) : static_cast<float>(tick);
+                if (IsPath(keys))
+                    return InterpolateCubicSpline(ticks, values, at, false);
                 return keys.size() < 4 ? InterpolateLinear(ticks, values, at)
                                        : InterpolateCubicSpline(ticks, values, at);
             }
@@ -197,10 +251,11 @@ namespace IWXMVM::KeyframeLogic
                 return static_cast<float>(values[i] + (values[i + 1] - values[i]) * fraction);
             default:
             {
-                // a cubic Hermite curve with the slopes Smooth gives the two keys
+                // a cubic Hermite curve with the slopes Smooth gives the two keys (the campath's own, IsPath)
+                const auto slope = IsPath(keys) ? GetPathSlope : GetSmoothSlope;
                 const double t = fraction, t2 = t * t, t3 = t2 * t;
-                const double leaving = GetSmoothSlope(keys, values, i) * span;
-                const double arriving = GetSmoothSlope(keys, values, i + 1) * span;
+                const double leaving = slope(keys, values, i) * span;
+                const double arriving = slope(keys, values, i + 1) * span;
                 return static_cast<float>((2 * t3 - 3 * t2 + 1) * values[i] + (t3 - 2 * t2 + t) * leaving +
                                           (-2 * t3 + 3 * t2) * values[i + 1] + (t3 - t2) * arriving);
             }
@@ -232,6 +287,76 @@ namespace IWXMVM::KeyframeLogic
             return Types::KeyInterpolation::Hold;
         return type == Types::KeyframeablePropertyType::CampathCamera ? Types::KeyInterpolation::Auto
                                                                       : Types::KeyInterpolation::Smooth;
+    }
+
+    std::optional<Types::KeyInterpolation> GetSharedInterpolation(std::span<const Types::Keyframe> keys)
+    {
+        if (keys.empty())
+            return std::nullopt;
+        const auto first = keys.front().interpolation;
+        if (!std::ranges::all_of(keys, [first](const Types::Keyframe& key) { return key.interpolation == first; }))
+            return std::nullopt;
+        return first;
+    }
+
+    PathProfile MakeProfile(std::span<const PathSample> samples)
+    {
+        PathProfile profile;
+        std::vector<PathSample> kept;
+        for (const auto& sample : samples)
+        {
+            if (kept.empty() || sample.tick > kept.back().tick)
+                kept.push_back(sample);
+        }
+        profile.frames = kept.size();
+        if (kept.size() < 2)
+            return profile;
+
+        // each frame to the next: its velocity, and the tick halfway
+        struct Step
+        {
+            glm::dvec3 velocity;
+            double speed, tick;
+        };
+        std::vector<Step> steps;
+        for (std::size_t i = 0; i + 1 < kept.size(); ++i)
+        {
+            const double seconds = (kept[i + 1].tick - kept[i].tick) / 1000.0;
+            const auto velocity = glm::dvec3(kept[i + 1].position - kept[i].position) / seconds;
+            steps.push_back({velocity, glm::length(velocity), (kept[i].tick + kept[i + 1].tick) / 2.0});
+        }
+        profile.first = steps.front().speed;
+        profile.last = steps.back().speed;
+        profile.least = profile.most = profile.first;
+        for (const auto& step : steps)
+        {
+            profile.least = std::min(profile.least, step.speed);
+            profile.most = std::max(profile.most, step.speed);
+        }
+        std::optional<double> acceleration;
+        for (std::size_t i = 0; i + 1 < steps.size(); ++i)
+        {
+            const auto& a = steps[i];
+            const auto& b = steps[i + 1];
+            if (a.speed > 1e-6 && b.speed > 1e-6)
+            {
+                const auto turn = glm::degrees(
+                    std::acos(std::clamp(glm::dot(a.velocity, b.velocity) / (a.speed * b.speed), -1.0, 1.0)));
+                if (turn > profile.turn)
+                {
+                    profile.turn = turn;
+                    profile.turnTick = (a.tick + b.tick) / 2.0;
+                }
+            }
+            const double now = (b.speed - a.speed) / ((b.tick - a.tick) / 1000.0);
+            if (acceleration && std::abs(now - *acceleration) > profile.accelerationStep)
+            {
+                profile.accelerationStep = std::abs(now - *acceleration);
+                profile.accelerationStepTick = a.tick;
+            }
+            acceleration = now;
+        }
+        return profile;
     }
 
     Types::KeyInterpolation GetNewKeyInterpolation(std::span<const Types::Keyframe> keys, std::uint32_t tick,

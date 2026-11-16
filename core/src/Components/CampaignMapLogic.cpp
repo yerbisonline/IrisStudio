@@ -43,6 +43,15 @@ namespace IWXMVM::Components::CampaignMapLogic
             "mp_sd_spawn_attacker", "mp_sd_spawn_defender",   "mp_dem_spawn_attacker",
             "mp_dem_spawn_defender"};
 
+        // The zone a language's twin is of: two letters and an underscore before its name (en_cuba). Not "mp_", the
+        // prefix of multiplayer's maps: mp_kowloon is one of them, not the campaign's kowloon in a language
+        std::optional<std::string_view> GetLanguageTwinOf(std::string_view zone)
+        {
+            if (zone.size() <= 3 || zone[2] != '_' || zone.starts_with("mp_"))
+                return std::nullopt;
+            return zone.substr(3);
+        }
+
         std::optional<glm::vec3> ReadVector(const std::string* text)
         {
             if (!text)
@@ -183,9 +192,8 @@ namespace IWXMVM::Components::CampaignMapLogic
     {
         if (const auto level = catalog.FindLevel(zone))
             return level;
-        // a language's twin: two letters and an underscore before the level's name
-        if (zone.size() > 3 && zone[2] == '_')
-            return catalog.FindLevel(zone.substr(3));
+        if (const auto twinOf = GetLanguageTwinOf(zone))
+            return catalog.FindLevel(*twinOf);
         return nullptr;
     }
 
@@ -193,7 +201,7 @@ namespace IWXMVM::Components::CampaignMapLogic
     {
         constexpr std::string_view PATCH = "_patch";
         const auto twinOf = [&](std::string_view name) {
-            return zone == name || (zone.size() > 3 && zone[2] == '_' && zone.substr(3) == name) ||
+            return zone == name || GetLanguageTwinOf(zone) == name ||
                    (zone.size() == name.size() + PATCH.size() && zone.starts_with(name) && zone.ends_with(PATCH));
         };
         return std::ranges::any_of(level.zones, twinOf) ||

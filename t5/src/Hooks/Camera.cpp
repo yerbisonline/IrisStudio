@@ -191,6 +191,17 @@ namespace IWXMVM::T5::Hooks::Camera
         return keyframeManager.Interpolate(property, campathKeyframes, timelineTick).cameraData.position;
     }
 
+    // the dolly's latest views, for the harness (GetDollyViews): some seconds of them
+    constexpr std::size_t KEPT_DOLLY_VIEWS = 1024;
+    std::mutex dollyMutex;
+    std::deque<DollyView> dollyViews;
+
+    std::vector<DollyView> GetDollyViews()
+    {
+        std::lock_guard lock(dollyMutex);
+        return {dollyViews.begin(), dollyViews.end()};
+    }
+
     void ApplyDollyCamera(CameraState& state)
     {
         if (campathKeyframes.empty() || Components::Rewinding::IsRewinding())
@@ -198,12 +209,17 @@ namespace IWXMVM::T5::Hooks::Camera
 
         auto& keyframeManager = Components::KeyframeManager::Get();
         const auto& property = keyframeManager.GetProperty(Types::KeyframeablePropertyType::CampathCamera);
-        const auto value =
-            keyframeManager.Interpolate(property, campathKeyframes, Components::Playback::GetTimelineTick());
+        const auto tick = Components::Playback::GetTimelineTick();
+        const auto value = keyframeManager.Interpolate(property, campathKeyframes, tick);
 
         state.position = value.cameraData.position;
         state.rotation = value.cameraData.rotation;
         state.fov = value.cameraData.fov;
+
+        std::lock_guard lock(dollyMutex);
+        dollyViews.push_back({tick, state.position, state.rotation, NowMs()});
+        if (dollyViews.size() > KEPT_DOLLY_VIEWS)
+            dollyViews.pop_front();
     }
 
     // The bone camera follows its bone on the render thread, from the bones of a frame before, which a copy then takes

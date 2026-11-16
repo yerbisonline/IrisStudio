@@ -22,20 +22,36 @@ namespace IWXMVM::KeyframeLogic
     std::vector<float> GetValues(std::span<const Types::Keyframe> keys, std::uint32_t index, bool angle);
 
     // A fraction of the way from a key to the next (0 to 1) as the first key's ease out and the next key's ease in
-    // make it: the same without them; with 1 it leaves (arrives) at rest. It never goes back.
+    // make it: the same without them; with 1 it leaves (arrives) at rest; an end without an ease is left unbent, so
+    // the key there shows no more than the curve has it. It never goes back.
     double Ease(double fraction, float easeOut, float easeIn);
     // the fraction that Ease makes this one of
     double Uneased(double eased, float easeOut, float easeIn);
+
+    // Whether keys are the campath's nodes. A camera's X, Y, Z and angles are separate curves, and a curve that stops
+    // at a key (as the Look's Smooth does, so a value doesn't overshoot) shows in the picture as the camera braking on
+    // one axis at a node, and a curve at rest at the first and last key as the whole move slowing to a stop. So the
+    // campath's Auto and Smooth pass through every node and both ends, and only its eases slow it.
+    bool IsPath(std::span<const Types::Keyframe> keys);
+    // off for the harness's comparisons: the campath's nodes going as the Look's keys do, and the eases' first shape,
+    // as they all were before the campath had its own curves
+    void SetPathCurves(bool on);
 
     // How fast a key's value changes under Smooth, per tick: the slope of the parabola through the keys before and
     // after it, but 0 at the first and last key and where the values turn (so the curve doesn't overshoot them), and
     // no more than three times the slope on either side (so it doesn't between them either)
     double GetSmoothSlope(std::span<const Types::Keyframe> keys, std::span<const float> values, std::size_t key);
+    // The same for the campath's nodes: the slope of the parabola through the nodes before and after it, with no stop
+    // and no limit; at the first and last node, the slope at which the curve arrives there unbent (its second
+    // derivative 0); two nodes, the straight line between them
+    double GetPathSlope(std::span<const Types::Keyframe> keys, std::span<const float> values, std::size_t key);
 
     // The interpolation keys had before each had its own ("Auto"), as KeyframeManager had it: linear, and a cubic
-    // spline through all of them (Numerical Recipes, with flat ends)
+    // spline through all of them (Numerical Recipes, with flat ends). Not at rest, the spline's ends are unbent instead
+    // (a natural spline, the campath's Auto from two nodes: two make a straight line).
     float InterpolateLinear(std::span<const float> ticks, std::span<const float> values, float tick);
-    float InterpolateCubicSpline(std::span<const float> ticks, std::span<const float> values, float tick);
+    float InterpolateCubicSpline(std::span<const float> ticks, std::span<const float> values, float tick,
+                                 bool atRest = true);
 
     // One value of the keys at a tick: the first key's before it, the last key's after it. Unwrapped when it is an
     // angle. Without the eases when not eased (the campath at constant speed eases only its ends).
@@ -48,9 +64,35 @@ namespace IWXMVM::KeyframeLogic
     Types::KeyframeValue Evaluate(Types::KeyframeValueType type, std::span<const Types::Keyframe> keys, double tick,
                                   bool eased = true);
 
-    // The interpolation the first key of a property's track gets: Auto for the campath's nodes (the camera goes as it
-    // always did in IWXMVM), Hold for switches, Smooth for the other properties
+    // The interpolation the first key of a property's track gets: Auto for the campath's nodes (one curve through all
+    // of them, as IWXMVM moved the camera), Hold for switches, Smooth for the other properties
     Types::KeyInterpolation GetDefaultInterpolation(Types::KeyframeablePropertyType type);
+
+    // The interpolation all the keys have, none when they differ or there are none (the Camera tab's Interpolation row
+    // is the campath's)
+    std::optional<Types::KeyInterpolation> GetSharedInterpolation(std::span<const Types::Keyframe> keys);
+
+    // How a camera moved over frames, from where it was at each: the harness measures the
+    // dolly as the game drew it with it, the tests the campath's curves. Frames at the tick of the one before are left
+    // out.
+    struct PathSample
+    {
+        double tick = 0.0;
+        glm::vec3 position{0.0f};
+    };
+    struct PathProfile
+    {
+        std::size_t frames = 0;  // the samples it was made from
+        // the speed from each frame to the next, units per second: the least and the most, the first and the last
+        double least = 0.0, most = 0.0, first = 0.0, last = 0.0;
+        // the biggest change of acceleration (units per second squared) from one frame to the next, and where; a curve
+        // whose acceleration jumps at a node (the Look's Smooth on a camera) shows there
+        double accelerationStep = 0.0, accelerationStepTick = 0.0;
+        // the biggest turn of the direction of travel from one frame to the next, in degrees, and where; a corner shows
+        // as one big turn
+        double turn = 0.0, turnTick = 0.0;
+    };
+    PathProfile MakeProfile(std::span<const PathSample> samples);
 
     // The interpolation of a key added at a tick: the key's before it (after it, when it is the first), so a key
     // added to an older file's campath doesn't change how the rest of it goes; the property's default on a track

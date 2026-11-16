@@ -309,7 +309,8 @@ namespace IWXMVM::Components
                     LOG_WARN("Skipping the keys of an unknown property \"{0}\"", propertyName);
                     continue;
                 }
-                auto property = Components::KeyframeManager::Get().GetProperty(propertyType.value());
+                // (the manager's own: each key read keeps a reference to it, KeyframeLogic::IsPath reads it)
+                const auto& property = Components::KeyframeManager::Get().GetProperty(propertyType.value());
                 if (property.type == Types::KeyframeablePropertyType::CampathCamera)
                     Components::KeyframeManager::Get().LoadConstantSpeed(
                         propertyObject->value(NODE_CONSTANT_SPEED, false));

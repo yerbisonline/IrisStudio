@@ -552,7 +552,59 @@ namespace IWXMVM::UI
         row("Field of View", "##fov", &value.cameraData.fov, 1, 0.25f);
         ImGuiEx::Keyframeable::EndEditWhenIdle();
 
-        // the node's way to the next one
+        // how the camera goes along the path: every node's, Mixed when they differ (one node's is set from its
+        // diamond's menu on the timeline), with how many have which under it
+        {
+            const auto shared = KeyframeLogic::GetSharedInterpolation(nodes);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Interpolation");
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * columnPercent);
+            ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * (1.0f - columnPercent) -
+                                    ImGui::GetStyle().WindowPadding.x);
+            constexpr std::array ORDER = {Types::KeyInterpolation::Auto, Types::KeyInterpolation::Smooth,
+                                          Types::KeyInterpolation::Linear, Types::KeyInterpolation::Hold};
+            const auto preview = shared ? std::string(magic_enum::enum_name(*shared)) : std::string("Mixed");
+            if (ImGui::BeginCombo("##interpolation", preview.c_str()))
+            {
+                for (const auto interpolation : ORDER)
+                {
+                    const auto name = magic_enum::enum_name(interpolation);
+                    if (ImGui::Selectable(std::string(name).c_str(), shared == interpolation) &&
+                        shared != interpolation)
+                    {
+                        auto changed = nodes;
+                        for (auto& node : changed)
+                            node.interpolation = interpolation;
+                        keyframeManager.ChangeKeyframes(property, std::move(changed),
+                                                        std::format("make the campath {}", name));
+                    }
+                    ImGuiEx::Keyframeable::Record(
+                        std::format("control.interpolation.{}", ToLower(std::string(name))));
+                }
+                ImGui::EndCombo();
+            }
+            ImGuiEx::Keyframeable::Record("control.interpolation");
+            ImGui::SetItemTooltip(
+                "Every node's: Auto (one curve through all nodes), Smooth (a curve through each node from the "
+                "nodes beside it), Linear, or Hold (stays until the next node). A node's own: its diamond's menu "
+                "on the timeline");
+            std::string counts;
+            if (shared)
+                counts = nodes.size() == 1 ? "1 node" : nodes.size() == 2 ? "Both nodes"
+                                                                         : std::format("All {} nodes", nodes.size());
+            for (const auto interpolation : ORDER)
+            {
+                const auto count = std::ranges::count(nodes, interpolation, &Types::Keyframe::interpolation);
+                if (!shared && count > 0)
+                    counts += std::format("{}{} {}", counts.empty() ? "" : ", ", count,
+                                          magic_enum::enum_name(interpolation));
+            }
+            ImGui::TextDisabled("%s", counts.c_str());
+            ImGuiEx::Keyframeable::Record("control.interpolation.counts");
+        }
+
+        // the node's eases
         here = findHere();
         if (here != nodes.end())
         {
@@ -561,32 +613,6 @@ namespace IWXMVM::UI
                 edit(changed);
                 keyframeManager.ChangeKeyframes(property, {changed}, std::move(label));
             };
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Interpolation");
-            ImGui::SameLine();
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * columnPercent);
-            ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * (1.0f - columnPercent) -
-                                    ImGui::GetStyle().WindowPadding.x);
-            const auto current = here->interpolation;
-            if (ImGui::BeginCombo("##interpolation", std::string(magic_enum::enum_name(current)).c_str()))
-            {
-                // (Auto, which new nodes have, too)
-                for (const auto interpolation : {Types::KeyInterpolation::Smooth, Types::KeyInterpolation::Linear,
-                                                 Types::KeyInterpolation::Hold, Types::KeyInterpolation::Auto})
-                {
-                    const auto name = magic_enum::enum_name(interpolation);
-                    if (ImGui::Selectable(std::string(name).c_str(), current == interpolation) &&
-                        current != interpolation)
-                        change([interpolation](Types::Keyframe& node) { node.interpolation = interpolation; },
-                               std::format("make the node {}", name));
-                }
-                ImGui::EndCombo();
-            }
-            ImGuiEx::Keyframeable::Record("control.interpolation");
-            ImGui::SetItemTooltip(
-                "How the camera goes on from this node to the next: Smooth (a curve that doesn't "
-                "overshoot the nodes), Linear, Hold (stays until the next node), or Auto, as the camera always "
-                "moved and new nodes do: straight under four nodes, a curve through all from four");
 
             // how much, a drag of the amount one step; after it, Auto when it is Auto Ease's, or on a side Auto Ease
             // eases (an end of the path; with All Nodes every side between two nodes) whose ease is the node's own, a
