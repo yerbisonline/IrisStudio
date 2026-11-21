@@ -231,8 +231,6 @@ namespace IWXMVM::Components
         InitializeProperty(boneCameraRotationProperty);
         InitializeProperty(boneCameraFovProperty);
 
-        static bool justLoadedDemo = false;
-
         // what is left to save goes with the demo it belongs to
         Events::RegisterListener(EventType::PreDemoLoad,
                                  [] { Components::KeyframeSerializer::WriteRecentIfChanged(true); });
@@ -253,18 +251,15 @@ namespace IWXMVM::Components
             Markers::Clear();
             Components::Playback::SetFrozenSpans({});
             constantSpeed = false;
-            justLoadedDemo = true;
+            // (read once the demo plays: through the load the game still says it plays the one)
+            Components::KeyframeSerializer::AskRecentRead();
         });
 
         Events::RegisterListener(EventType::OnFrame, [&]() {
             Components::KeyframeSerializer::WriteRecentIfChanged();
 
-            if (IWXMVM::Mod::GetGameInterface()->GetGameState() == Types::GameState::InDemo && justLoadedDemo)
-            {
-                Components::KeyframeSerializer::ReadRecent();
-                justLoadedDemo = false;
+            if (Components::KeyframeSerializer::ReadRecentWhenLoaded())
                 UI::TimelineGraph::Refit();
-            }
         });
     }
 

@@ -10,6 +10,7 @@
 #include "Markers.hpp"
 #include "CameraManager.hpp"
 #include "RuntimeProperties.hpp"
+#include "RecentKeysLogic.hpp"
 
 namespace IWXMVM::Components
 {
@@ -385,6 +386,43 @@ namespace IWXMVM::Components
     std::mutex recentMutex;
     std::optional<std::chrono::steady_clock::time_point> recentChangedAt;
 
+    // the demo loads asked (on the main thread) and where their reads are (on the render thread)
+    std::atomic<std::uint32_t> recentLoadsAsked = 0;
+    std::mutex recentLoadsMutex;
+    RecentKeysLogic::Loads recentLoads;
+
+    bool IsRecentReadPending()
+    {
+        std::lock_guard lock(recentLoadsMutex);
+        return RecentKeysLogic::IsReadPending(recentLoads) || recentLoads.asked != recentLoadsAsked;
+    }
+
+    void KeyframeSerializer::AskRecentRead()
+    {
+        ++recentLoadsAsked;
+    }
+
+    bool KeyframeSerializer::ReadRecentWhenLoaded()
+    {
+        const auto game = Mod::GetGameInterface();
+        const RecentKeysLogic::Seen seen{
+            .now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                  std::chrono::steady_clock::now().time_since_epoch())
+                                                  .count()),
+            .asked = recentLoadsAsked,
+            .state = game->GetGameState(),
+            .reading = game->IsReadingDemo()};
+        {
+            std::lock_guard lock(recentLoadsMutex);
+            if (!RecentKeysLogic::Advance(recentLoads, seen))
+                return false;
+        }
+        LOG_DEBUG("Reading the keys of demo load {} ({})", seen.asked, game->GetDemoInfo().name);
+        // (a save the load's clear or an edit since asked for comes after: it writes what was read with the edit)
+        ReadRecent();
+        return true;
+    }
+
     void KeyframeSerializer::WriteRecentSoon()
     {
         std::lock_guard lock(recentMutex);
@@ -393,6 +431,10 @@ namespace IWXMVM::Components
 
     void KeyframeSerializer::WriteRecentIfChanged(bool now)
     {
+        // (a load waiting for its keys has none of its own yet: what changed meanwhile is saved once they're read, so
+        // an edit made as the next demo starts is kept)
+        if (IsRecentReadPending())
+            return;
         {
             std::lock_guard lock(recentMutex);
             if (!recentChangedAt ||
@@ -403,6 +445,16 @@ namespace IWXMVM::Components
         // (the demo's name says where they go)
         if (Mod::GetGameInterface()->GetGameState() == Types::GameState::InDemo)
             WriteRecent();
+    }
+
+    bool KeyframeSerializer::IsWriteDue()
+    {
+        {
+            std::lock_guard lock(recentMutex);
+            if (!recentChangedAt)
+                return false;
+        }
+        return Mod::GetGameInterface()->GetGameState() == Types::GameState::InDemo && !IsRecentReadPending();
     }
 
     void KeyframeSerializer::ReadRecent()

@@ -67,6 +67,9 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>StdInclude.hpp</PrecompiledHeaderFile>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <!-- the C++ runtime is linked in, so the DLL needs no redistributable on the PC it runs on
+            -->
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <DisableSpecificWarnings>4996</DisableSpecificWarnings>
       <TreatWarningAsError>true</TreatWarningAsError>
     </ClCompile>
@@ -97,6 +100,7 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>StdInclude.hpp</PrecompiledHeaderFile>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -172,6 +176,7 @@
     <ClCompile Include="src\Components\ReShadeLogic.cpp" />
     <ClCompile Include="src\Components\AddressSpaceLogic.cpp" />
     <ClCompile Include="src\Components\QualityLogic.cpp" />
+    <ClCompile Include="src\Components\RecentKeysLogic.cpp" />
     <ClCompile Include="src\Components\RestartLogic.cpp" />
     <ClCompile Include="src\Components\SurfaceDepth.cpp" />
     <ClCompile Include="src\Components\SurfaceLogic.cpp" />
@@ -318,6 +323,7 @@
     <ClInclude Include="src\Components\ReShadeLogic.hpp" />
     <ClInclude Include="src\Components\AddressSpaceLogic.hpp" />
     <ClInclude Include="src\Components\QualityLogic.hpp" />
+    <ClInclude Include="src\Components\RecentKeysLogic.hpp" />
     <ClInclude Include="src\Components\RestartLogic.hpp" />
     <ClInclude Include="src\Components\SurfaceDepth.hpp" />
     <ClInclude Include="src\Components\SurfaceLogic.hpp" />

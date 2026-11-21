@@ -104,6 +104,7 @@
     <ClCompile Include="..\..\core\src\Components\ReShadeLogic.cpp" />
     <ClCompile Include="..\..\core\src\Components\AddressSpaceLogic.cpp" />
     <ClCompile Include="..\..\core\src\Components\QualityLogic.cpp" />
+    <ClCompile Include="..\..\core\src\Components\RecentKeysLogic.cpp" />
     <ClCompile Include="..\..\core\src\Components\RestartLogic.cpp" />
     <ClCompile Include="..\..\core\src\Components\SurfaceLogic.cpp" />
     <ClCompile Include="..\..\core\src\Components\TextureLogic.cpp" />
@@ -189,6 +190,7 @@
     <ClCompile Include="ReShadeTests.cpp" />
     <ClCompile Include="AddressSpaceLogicTests.cpp" />
     <ClCompile Include="QualityLogicTests.cpp" />
+    <ClCompile Include="RecentKeysTests.cpp" />
     <ClCompile Include="RestartLogicTests.cpp" />
     <ClCompile Include="SurfaceTests.cpp" />
   </ItemGroup>

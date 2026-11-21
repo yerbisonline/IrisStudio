@@ -105,6 +105,11 @@ namespace Injector
     // LoadLibraryW of the DLL in the game; false, with why in error, when it didn't load
     bool Inject(const Game& game, const std::filesystem::path& dllPath, std::string& error);
 
+    // Why the game (of that process id; 0 for none) didn't load the DLL, in a line for the user. LoadLibraryW's error
+    // stays in the game's thread, so the DLL is looked at from this process, 32-bit like the game: whether the file is
+    // still there, whether Windows maps it, and whether each DLL and function it imports is on this PC
+    std::string WhyNotLoaded(DWORD processId, const std::filesystem::path& dllPath);
+
     // Takes the DLL out of the game after File > Exit (Plutonium keeps it loaded); message says what happened, false
     // when it didn't work
     bool Unload(const Game& game, const std::filesystem::path& dllPath, std::string& message);

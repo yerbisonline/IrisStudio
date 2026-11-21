@@ -449,12 +449,91 @@ namespace Injector
 
         if (moduleHandle == 0)
         {
-            error = "The game failed to load the DLL. Make sure the Visual C++ 2015-2022 x86 redistributable is "
-                    "installed.";
+            error = WhyNotLoaded(game.ProcessId(), dllPath);
             return false;
         }
 
         return true;
+    }
+
+    namespace
+    {
+        // the C++ runtime's DLLs, which the redistributable brings
+        bool IsRuntimeDll(const std::string& name)
+        {
+            const auto lower = ToLower(std::wstring(name.begin(), name.end()));
+            for (const auto prefix : {L"msvcp", L"vcruntime", L"concrt", L"ucrtbase", L"api-ms-win-crt"})
+            {
+                if (lower.starts_with(prefix))
+                    return true;
+            }
+            return false;
+        }
+
+        // what the DLL imports that this PC can't give it: a DLL that isn't there, or one too old to have a function
+        std::string MissingImport(DWORD processId, HMODULE image, const std::string& name)
+        {
+            const auto base = reinterpret_cast<const std::uint8_t*>(image);
+            const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+            const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
+            const auto& directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+            if (directory.VirtualAddress == 0)
+                return {};
+
+            for (auto imports = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + directory.VirtualAddress);
+                 imports->Name; ++imports)
+            {
+                const std::string needed = reinterpret_cast<const char*>(base + imports->Name);
+                const auto hint =
+                    IsRuntimeDll(needed) ? " Install the Visual C++ 2015-2022 x86 redistributable." : std::string();
+                const HMODULE module = LoadLibraryExA(needed.c_str(), nullptr, 0);
+                if (!module)
+                {
+                    // the game may have its own copy in its folder (d3dx9_43.dll)
+                    if (processId && FindModule(processId, needed))
+                        continue;
+                    return std::format("{} needs {}, which this PC doesn't have.{}", name, needed, hint);
+                }
+
+                const auto thunks = imports->OriginalFirstThunk ? imports->OriginalFirstThunk : imports->FirstThunk;
+                bool tooOld = false;
+                for (auto thunk = reinterpret_cast<const IMAGE_THUNK_DATA32*>(base + thunks);
+                     thunk->u1.AddressOfData && !tooOld; ++thunk)
+                {
+                    const auto function =
+                        IMAGE_SNAP_BY_ORDINAL32(thunk->u1.Ordinal)
+                            ? MAKEINTRESOURCEA(IMAGE_ORDINAL32(thunk->u1.Ordinal))
+                            : reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(base + thunk->u1.AddressOfData)->Name;
+                    tooOld = !GetProcAddress(module, function);
+                }
+                FreeLibrary(module);
+                if (tooOld)
+                    return std::format("{} needs a newer {} than this PC has.{}", name, needed, hint);
+            }
+            return {};
+        }
+    }  // namespace
+
+    std::string WhyNotLoaded(DWORD processId, const std::filesystem::path& dllPath)
+    {
+        const auto name = Narrow(dllPath.filename().wstring());
+        std::error_code ignored;
+        if (!std::filesystem::exists(dllPath, ignored))
+            return name + " is gone from its folder. An antivirus may have removed it: allow it there.";
+
+        // mapped as the game would map it, without its imports and without running it
+        const HMODULE image = LoadLibraryExW(dllPath.c_str(), nullptr, DONT_RESOLVE_DLL_REFERENCES);
+        if (!image)
+        {
+            return std::format("Windows won't load {} (error {}). An antivirus may block it: allow it there.", name,
+                               GetLastError());
+        }
+        const auto missing = MissingImport(processId, image, name);
+        FreeLibrary(image);
+        if (!missing.empty())
+            return missing;
+
+        return "The game refused " + name + ", though it and what it needs are there. An antivirus may block it.";
     }
 
     // Takes the DLL out of the game with the loader's LdrUnloadDll (which Plutonium leaves alone), once for each
